@@ -1,0 +1,6 @@
+name "gameoflife"
+description "Another Game of Life."
+authors "."
+copyright "."
+license "."
+dependency "bindbc-sdl" version="~>1.0.1"
