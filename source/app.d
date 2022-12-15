@@ -33,10 +33,10 @@ class Chunk
 		{
 			foreach (int y; 0 .. CHUNKSIZE)
 			{
-				//dfmt off
+				// dfmt off
 				newdata[x][y] = cast(ubyte) (
 					getNeighbours(x - 1, y - 1) + getNeighbours(x    , y - 1) + getNeighbours(x + 1, y - 1) +
-					getNeighbours(x - 1, y    ) +                         getNeighbours(x + 1, y    ) +
+					getNeighbours(x - 1, y    ) +                               getNeighbours(x + 1, y    ) +
 					getNeighbours(x - 1, y + 1) + getNeighbours(x    , y + 1) + getNeighbours(x + 1, y + 1)) ;
 
 				//dfmt on
@@ -49,18 +49,19 @@ class Chunk
 			{
 				ubyte* count = &newdata[x][y];
 				ubyte* current = &data[x][y];
-				//dfmt off
-				if(*count < 2 || *count > 3)
+
+				if (*count < 2 || *count > 3)
 					*current = 0;
-				else if(*count == 3)
+				else if (*count == 3)
 					*current = 1;
 			}
 		}
-		
 	}
 }
 
-immutable int CHUNKSIZE = 32;
+immutable int CHUNKSIZE = 64;
+
+TTF_Font* font;
 
 SDL_Renderer* sdlr;
 bool running;
@@ -74,6 +75,9 @@ bool mouseR;
 Uint8* keystates;
 Uint16 keymods;
 ubyte cSize = 8;
+int shiftX;
+int shiftY;
+bool active = true;
 
 Chunk[Tuple!(int, int)] field;
 
@@ -86,7 +90,15 @@ void main()
 	if (loadSDL() != sdlSupport)
 		writeln("Error loading SDL library");
 
+	writeln(sdlTTFSupport);
+
+	if (loadSDLTTF() != sdlTTFSupport)
+		writeln("Error loading SDL TTF library");
+
 	if (SDL_Init(SDL_INIT_VIDEO) < 0)
+		throw new SDLException();
+
+	if (TTF_Init() < 0)
 		throw new SDLException();
 
 	scope (exit)
@@ -99,9 +111,11 @@ void main()
 	if (!window)
 		throw new SDLException();
 
-	sdlr = SDL_CreateRenderer(window, -1, 0  | SDL_RENDERER_PRESENTVSYNC );
+	sdlr = SDL_CreateRenderer(window, -1, 0 | SDL_RENDERER_PRESENTVSYNC);
 
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
+
+	font = TTF_OpenFont("res/fonts/NotoSansMono.ttf", 14);
 
 	init();
 
@@ -111,15 +125,6 @@ void main()
 		pollEvents();
 		tick();
 		draw();
-		pollEvents();
-		draw();
-		pollEvents();
-		draw();
-		pollEvents();
-		draw();
-		pollEvents();
-		draw();
-		
 	}
 }
 
@@ -139,7 +144,6 @@ void init()
 	ch.data[13][11] = 1;
 	ch.data[12][12] = 1;
 	ch.data[12][13] = 1;
-
 }
 
 T sign(T)(T val)
@@ -161,17 +165,29 @@ ubyte getNeighboursN(int x, int y)
 
 void tick()
 {
-	if(mouseL)
+	if (mouseL)
 	{
 		auto tup = screen2cell(mouseX, mouseY);
 		ubyte* cell = getCell(tup[0], tup[1]);
-		if(cell !is null)
-				*cell = 1;
+		if (cell !is null)
+			*cell = 1;
 	}
 
-	foreach(chunk; field) {
-		chunk.iterate();
+	if (active)
+	{
+		foreach (chunk; field)
+		{
+			chunk.iterate();
+		}
 	}
+}
+
+void drawText(string text, int x, int y, SDL_Color col)
+{
+	SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text.toStringz, col);
+	SDL_Texture* tex = sdlr.SDL_CreateTextureFromSurface(surf);
+	sdlr.SDL_RenderCopy(tex, null, new SDL_Rect(x, y, surf.w, surf.h));
+	surf.SDL_FreeSurface();
 }
 
 void draw()
@@ -179,21 +195,27 @@ void draw()
 	sdlr.SDL_SetRenderDrawColor(0, 0, 0, 255);
 	sdlr.SDL_RenderClear();
 
-	foreach(i, chunk; field) {
+	foreach (i, chunk; field)
+	{
 		foreach (x; 0 .. CHUNKSIZE)
 		{
 			foreach (y; 0 .. CHUNKSIZE)
 			{
-				if(chunk.data[x][y])
+				if (chunk.data[x][y])
 				{
 					sdlr.SDL_SetRenderDrawColor(255, 255, 255, 255);
-					sdlr.SDL_RenderFillRect(new SDL_Rect(x * cSize, y * cSize, cSize, cSize));
+					sdlr.SDL_RenderFillRect(new SDL_Rect(x * cSize + shiftX, y * cSize + shiftY, cSize, cSize));
 				}
 			}
 		}
 		sdlr.SDL_SetRenderDrawColor(0, 255, 0, 128);
-		sdlr.SDL_RenderDrawRect(new SDL_Rect(i[0] * CHUNKSIZE * cSize, i[1] * CHUNKSIZE * cSize, CHUNKSIZE * cSize, CHUNKSIZE * cSize));
+		sdlr.SDL_RenderDrawRect(new SDL_Rect(
+				i[0] * CHUNKSIZE * cSize + shiftX,
+				i[1] * CHUNKSIZE * cSize + shiftY,
+				CHUNKSIZE * cSize, CHUNKSIZE * cSize));
 	}
+
+	drawText(screen2cell(mouseX, mouseY).toString, 0, 0, SDL_Color(255, 255, 255, 255));
 
 	sdlr.SDL_RenderPresent();
 }
@@ -233,7 +255,7 @@ void pollEvents()
 			onWindowEvent(event.window);
 			break;
 		default:
-			// writeln("Unhandled event: ", cast(SDL_EventType) event.type);
+			writeln("Unhandled event: ", cast(SDL_EventType) event.type);
 		}
 	}
 }
@@ -250,7 +272,11 @@ void onKeyDown(SDL_KeyboardEvent e)
 	switch (e.keysym.sym)
 	{
 	case SDLK_ESCAPE:
+	case SDLK_q:
 		quit();
+		break;
+	case SDLK_SPACE:
+		active = !active;
 		break;
 	default:
 	}
@@ -266,9 +292,9 @@ void onKeyUp(SDL_KeyboardEvent e)
 	}
 }
 
-Tuple!(int,int) screen2cell(int x, int y)
+Tuple!(int, int) screen2cell(int x, int y)
 {
-	return tuple(x / cSize, y / cSize);
+	return tuple((x - shiftX) / cSize, (y - shiftY) / cSize);
 }
 
 ubyte* getCell(int x, int y)
@@ -328,11 +354,30 @@ void onMouseMotion(SDL_MouseMotionEvent e)
 {
 	mouseX = e.x;
 	mouseY = e.y;
+
+	if (mouseR)
+	{
+		shiftX += e.xrel;
+		shiftY += e.yrel;
+	}
+	if (mouseL)
+	{
+		auto tup = screen2cell(mouseX, mouseY);
+		ubyte* cell = getCell(tup[0], tup[1]);
+		if (cell !is null)
+			*cell = 1;
+	}
 }
 
 void onMouseWheel(SDL_MouseWheelEvent e)
 {
+	import std.algorithm.comparison : clamp;
 
+	auto oldPoint = screen2cell(mouseX, mouseY);
+	cSize = cast(ubyte) clamp(cSize + e.y, 1, 128);
+	auto newPoint = screen2cell(mouseX, mouseY);
+	shiftX += (newPoint[0] - oldPoint[0]) * cSize;
+	shiftY += (newPoint[1] - oldPoint[1]) * cSize;
 }
 
 void onWindowEvent(SDL_WindowEvent e)
