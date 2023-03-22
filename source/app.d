@@ -3,7 +3,11 @@ import etc.linux.memoryerror;
 import bindbc.sdl;
 import std.string;
 import std.typecons : Tuple, tuple;
+import std.algorithm.iteration;
+import std.algorithm.mutation : swap;
+import std.conv : to;
 import std.math.traits;
+import std.math.rounding;
 
 /// Exception for SDL related issues
 class SDLException : Exception
@@ -17,46 +21,94 @@ class SDLException : Exception
 
 class Chunk
 {
+	int cx;
+	int cy;
+	int x_off;
+	int y_off;
 	ubyte[CHUNKSIZE][CHUNKSIZE] data;
 	ubyte[CHUNKSIZE][CHUNKSIZE] newdata;
 	bool processed;
 	ubyte emptyIterations;
 
-	this()
-	{
+	bool borderL, borderR, borderU, borderD;
 
+	this(int x, int y)
+	{
+		this.cx = x;
+		this.cy = y;
+		this.x_off = x * CHUNKSIZE;
+		this.y_off = y * CHUNKSIZE;
 	}
 
 	void iterate()
 	{
+		int emptycells = 0;
 		foreach (int x; 0 .. CHUNKSIZE)
 		{
 			foreach (int y; 0 .. CHUNKSIZE)
 			{
-				// dfmt off
-				newdata[x][y] = cast(ubyte) (
-					getNeighbours(x - 1, y - 1) + getNeighbours(x    , y - 1) + getNeighbours(x + 1, y - 1) +
-					getNeighbours(x - 1, y    ) +                               getNeighbours(x + 1, y    ) +
-					getNeighbours(x - 1, y + 1) + getNeighbours(x    , y + 1) + getNeighbours(x + 1, y + 1)) ;
-
-				//dfmt on
-			}
-		}
-
-		foreach (x; 0 .. CHUNKSIZE)
-		{
-			foreach (y; 0 .. CHUNKSIZE)
-			{
 				ubyte* count = &newdata[x][y];
 				ubyte* current = &data[x][y];
 
+				// dfmt off
+				newdata[x][y] = getNeighbours(x_off + x, y_off + y);
+				// dfmt on
+
 				if (*count < 2 || *count > 3)
-					*current = 0;
+					*count = 0;
 				else if (*count == 3)
-					*current = 1;
+				{
+					*count = 1;
+					if (*count == *current)
+						continue;
+
+					if (x == 0 && !borderL)
+					{
+						touchChunk(cx - 1, cy);
+						borderL = true;
+					}
+					else if (x == CHUNKSIZE - 1 && !borderR)
+					{
+						touchChunk(cx + 1, cy);
+						borderR = true;
+					}
+					if (y == 0 && !borderU)
+					{
+						touchChunk(cx, cy - 1);
+						borderU = true;
+					}
+					else if (y == CHUNKSIZE - 1 && !borderU)
+					{
+						touchChunk(cx, cy + 1);
+						borderD = true;
+					}
+				}
+				else
+					*count = *current;
+
+				emptycells += !*count;
 			}
 		}
+		if (emptycells == CHUNKSIZE * CHUNKSIZE)
+			emptyIterations++;
+		else
+			emptyIterations = 0;
+
 	}
+
+	void finish()
+	{
+		if (emptyIterations >= 5)
+		{
+			deleteChunk(cx, cy);
+		}
+		swap(data, newdata);
+	}
+}
+
+int mod(int a, int b) pure
+{
+	return (a % b + b) % b;
 }
 
 immutable int CHUNKSIZE = 64;
@@ -80,6 +132,7 @@ int shiftY;
 bool active = true;
 
 Chunk[Tuple!(int, int)] field;
+bool drawDebug = false;
 
 void main()
 {
@@ -130,7 +183,7 @@ void main()
 
 void init()
 {
-	field[tuple(0, 0)] = new Chunk();
+	field[tuple(0, 0)] = new Chunk(0, 0);
 	Chunk ch = field[tuple(0, 0)];
 	ch.data[12][4] = 1;
 	ch.data[12][5] = 1;
@@ -153,32 +206,82 @@ T sign(T)(T val)
 
 ubyte getNeighbours(int x, int y)
 {
-	Chunk* chunk = tuple(x / CHUNKSIZE - x.sign, y / CHUNKSIZE - y.sign) in field;
-	return chunk is null ? 0 : chunk.data[x % CHUNKSIZE][y % CHUNKSIZE];
+	// dfmt off
+	return cast(ubyte) (
+		getCellN(x - 1, y - 1) + getCellN(x    , y - 1) + getCellN(x + 1, y - 1) +
+		getCellN(x - 1, y    ) +                          getCellN(x + 1, y    ) +
+		getCellN(x - 1, y + 1) + getCellN(x    , y + 1) + getCellN(x + 1, y + 1)) ;
+	// dfmt on
 }
 
-ubyte getNeighboursN(int x, int y)
+Chunk* getChunk(int x, int y)
 {
-	Chunk* chunk = tuple(x / CHUNKSIZE - x.sign, y / CHUNKSIZE - y.sign) in field;
-	return chunk is null ? 0 : chunk.newdata[x % CHUNKSIZE][y % CHUNKSIZE];
+	return cell2chunk(x, y) in field;
+}
+
+ubyte* getCellP(int x, int y)
+{
+	Chunk* chunk = getChunk(x, y);
+	return chunk is null ? null : &chunk.data[x.mod(CHUNKSIZE)][y.mod(CHUNKSIZE)];
+}
+
+ubyte getCell(int x, int y)
+{
+	Chunk* chunk = getChunk(x, y);
+	return chunk is null ? 0 : chunk.data[x.mod(CHUNKSIZE)][y.mod(CHUNKSIZE)];
+}
+
+ubyte getCellN(int x, int y)
+{
+	Chunk* chunk = getChunk(x, y);
+	return chunk is null ? 0 : !!chunk.data[x.mod(CHUNKSIZE)][y.mod(CHUNKSIZE)];
+}
+
+Tuple!(int, int) screen2cell(int x, int y)
+{
+	return tuple((x - shiftX) / cSize, (y - shiftY) / cSize);
+}
+
+Tuple!(int, int) cell2chunk(int x, int y)
+{
+	return tuple(floor(cast(float) x / CHUNKSIZE).to!int, floor(cast(float) y / CHUNKSIZE).to!int);
+}
+
+void touchChunk(int x, int y)
+{
+	field.require(tuple(x, y), new Chunk(x, y));
+}
+
+void deleteChunk(int x, int y)
+{
+	auto tup = tuple(x, y);
+	field.remove(tup);
+	if (tuple(x - 1, y) in field)
+		field[tuple(x - 1, y)].borderR = false;
+	if (tuple(x + 1, y) in field)
+		field[tuple(x + 1, y)].borderL = false;
+	if (tuple(x, y - 1) in field)
+		field[tuple(x, y - 1)].borderD = false;
+	if (tuple(x, y + 1) in field)
+		field[tuple(x, y + 1)].borderU = false;
 }
 
 void tick()
 {
 	if (mouseL)
 	{
-		auto tup = screen2cell(mouseX, mouseY);
-		ubyte* cell = getCell(tup[0], tup[1]);
-		if (cell !is null)
-			*cell = 1;
+		auto cellCoords = screen2cell(mouseX, mouseY);
+		auto chunkCoords = cell2chunk(cellCoords[0], cellCoords[1]);
+		touchChunk(chunkCoords[0], chunkCoords[1]);
+		ubyte* cell = getCellP(cellCoords[0], cellCoords[1]);
+		*cell = 1;
 	}
 
 	if (active)
 	{
-		foreach (chunk; field)
-		{
-			chunk.iterate();
-		}
+
+		field.each!(c => c.iterate);
+		field.each!(c => c.finish);
 	}
 }
 
@@ -186,8 +289,9 @@ void drawText(string text, int x, int y, SDL_Color col)
 {
 	SDL_Surface* surf = TTF_RenderUTF8_Blended(font, text.toStringz, col);
 	SDL_Texture* tex = sdlr.SDL_CreateTextureFromSurface(surf);
-	sdlr.SDL_RenderCopy(tex, null, new SDL_Rect(x, y, surf.w, surf.h));
 	surf.SDL_FreeSurface();
+	sdlr.SDL_RenderCopy(tex, null, new SDL_Rect(x, y, surf.w, surf.h));
+	tex.SDL_DestroyTexture();
 }
 
 void draw()
@@ -195,7 +299,7 @@ void draw()
 	sdlr.SDL_SetRenderDrawColor(0, 0, 0, 255);
 	sdlr.SDL_RenderClear();
 
-	foreach (i, chunk; field)
+	foreach (chunk; field)
 	{
 		foreach (x; 0 .. CHUNKSIZE)
 		{
@@ -204,18 +308,26 @@ void draw()
 				if (chunk.data[x][y])
 				{
 					sdlr.SDL_SetRenderDrawColor(255, 255, 255, 255);
-					sdlr.SDL_RenderFillRect(new SDL_Rect(x * cSize + shiftX, y * cSize + shiftY, cSize, cSize));
+					sdlr.SDL_RenderFillRect(new SDL_Rect((chunk.x_off + x) * cSize + shiftX,
+							(chunk.y_off + y) * cSize + shiftY, cSize, cSize));
 				}
 			}
 		}
 		sdlr.SDL_SetRenderDrawColor(0, 255, 0, 128);
 		sdlr.SDL_RenderDrawRect(new SDL_Rect(
-				i[0] * CHUNKSIZE * cSize + shiftX,
-				i[1] * CHUNKSIZE * cSize + shiftY,
+				chunk.cx * CHUNKSIZE * cSize + shiftX,
+				chunk.cy * CHUNKSIZE * cSize + shiftY,
 				CHUNKSIZE * cSize, CHUNKSIZE * cSize));
 	}
 
-	drawText(screen2cell(mouseX, mouseY).toString, 0, 0, SDL_Color(255, 255, 255, 255));
+	import std.math;
+
+	auto cellCoords = screen2cell(mouseX, mouseY);
+	drawText(cellCoords.toString, 0, 0, SDL_Color(255, 255, 255, 255));
+	drawText(cell2chunk(cellCoords.expand).toString,
+		0, 20, SDL_Color(255, 255, 255, 255));
+	drawText(tuple(cellCoords[0].mod(CHUNKSIZE), cellCoords[1].mod(CHUNKSIZE))
+			.toString, 0, 40, SDL_Color(255, 255, 255, 255));
 
 	sdlr.SDL_RenderPresent();
 }
@@ -278,6 +390,9 @@ void onKeyDown(SDL_KeyboardEvent e)
 	case SDLK_SPACE:
 		active = !active;
 		break;
+	case SDLK_F3:
+		drawDebug = !drawDebug;
+		break;
 	default:
 	}
 }
@@ -290,17 +405,6 @@ void onKeyUp(SDL_KeyboardEvent e)
 	{
 	default:
 	}
-}
-
-Tuple!(int, int) screen2cell(int x, int y)
-{
-	return tuple((x - shiftX) / cSize, (y - shiftY) / cSize);
-}
-
-ubyte* getCell(int x, int y)
-{
-	Chunk* chunk = tuple(x / CHUNKSIZE - x.sign, y / CHUNKSIZE - y.sign) in field;
-	return chunk is null ? null : &chunk.data[x % CHUNKSIZE][y % CHUNKSIZE];
 }
 
 void onMouseDown(SDL_MouseButtonEvent e)
@@ -362,8 +466,8 @@ void onMouseMotion(SDL_MouseMotionEvent e)
 	}
 	if (mouseL)
 	{
-		auto tup = screen2cell(mouseX, mouseY);
-		ubyte* cell = getCell(tup[0], tup[1]);
+		auto cellCoords = screen2cell(mouseX, mouseY);
+		ubyte* cell = getCellP(cellCoords[0], cellCoords[1]);
 		if (cell !is null)
 			*cell = 1;
 	}
