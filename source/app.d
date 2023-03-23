@@ -321,8 +321,14 @@ void draw()
 	sdlr.SDL_SetRenderDrawColor(0, 0, 0, 255);
 	sdlr.SDL_RenderClear();
 
+	auto chunkRange = tuple(screen2cell(0, 0).expand.cell2chunk,
+		screen2cell(windowW, windowH).expand.cell2chunk);
+	uint chunksRendered;
+
 	foreach (chunk; field)
 	{
+		if (chunk.cx < chunkRange[0][0] || chunk.cx > chunkRange[1][0] || chunk.cy < chunkRange[0][1] || chunk.cy > chunkRange[1][1])
+			continue;
 		foreach (x; 0 .. CHUNKSIZE)
 		{
 			foreach (y; 0 .. CHUNKSIZE)
@@ -343,20 +349,21 @@ void draw()
 					chunk.cy * CHUNKSIZE * cSize + shiftY,
 					CHUNKSIZE * cSize, CHUNKSIZE * cSize));
 		}
+		chunksRendered++;
 	}
 	drawText(fps.format!"%.2f fps", 0, 0, SDL_Color(0x00, 0xFF, 0x00, 0xFF));
 	drawText(iteration.format!"iteration %d", 0, 20, SDL_Color(0xFF, 0xFF, 0x00, 0xFF));
 	if (drawDebug)
 	{
 		drawText(format!"%d chunks / %d cells"(field.length, (field.length * CHUNKSIZE * CHUNKSIZE)), 0, 40, WHITE);
-
+		drawText(chunksRendered.format!"%d chunks visible", 0, 60, WHITE);
 		auto cellCoords = screen2cell(mouseX, mouseY);
 		auto chunkCoords = cellCoords.expand.cell2chunk;
 		drawText(format!"%(%(%d %d%) / %)"([
 				cellCoords,
 				chunkCoords,
 				tuple(cellCoords[0].mod(CHUNKSIZE), cellCoords[1].mod(CHUNKSIZE))
-			]), 0, 60, WHITE);
+			]), 0, 80, WHITE);
 	}
 	if (sw.peek.total!"msecs" >= 500)
 	{
