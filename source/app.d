@@ -34,7 +34,7 @@ class Chunk
 	bool processed;
 	ubyte emptyIterations;
 
-	bool borderL, borderR, borderU, borderD;
+	bool borderL = true, borderR = true, borderU = true, borderD = true;
 
 	this(int x, int y)
 	{
@@ -46,53 +46,80 @@ class Chunk
 
 	void iterate()
 	{
-		int emptycells = 0;
-		foreach (int x; 0 .. CHUNKSIZE)
+		uint emptycells = 0;
+
+		void processOuter(int x, int y)
 		{
-			foreach (int y; 0 .. CHUNKSIZE)
+			void checkBorders()
 			{
-				ubyte* count = &newdata[x][y];
-				ubyte* current = &data[x][y];
-
-				// dfmt off
-				newdata[x][y] = getNeighbours(x_off + x, y_off + y);
-				// dfmt on
-
-				if (*count < 2 || *count > 3)
-					*count = 0;
-				else if (*count == 3)
+				if (borderL && x == 0)
 				{
-					*count = 1;
-					if (*count == *current)
-						continue;
-
-					if (x == 0 && !borderL)
-					{
-						touchChunk(cx - 1, cy);
-						borderL = true;
-					}
-					else if (x == CHUNKSIZE - 1 && !borderR)
-					{
-						touchChunk(cx + 1, cy);
-						borderR = true;
-					}
-					if (y == 0 && !borderU)
-					{
-						touchChunk(cx, cy - 1);
-						borderU = true;
-					}
-					else if (y == CHUNKSIZE - 1 && !borderU)
-					{
-						touchChunk(cx, cy + 1);
-						borderD = true;
-					}
+					touchChunk(cx - 1, cy);
+					borderL = false;
 				}
-				else
-					*count = *current;
-
-				emptycells += !*count;
+				else if (borderR && x == CHUNKSIZE - 1)
+				{
+					touchChunk(cx + 1, cy);
+					borderR = false;
+				}
+				if (borderU && y == 0)
+				{
+					touchChunk(cx, cy - 1);
+					borderU = false;
+				}
+				else if (borderU && y == CHUNKSIZE - 1)
+				{
+					touchChunk(cx, cy + 1);
+					borderD = false;
+				}
 			}
+
+			auto count = ringSum!getCellN(x_off + x, y_off + y);
+
+			if (count < 2 || count > 3)
+				newdata[x][y] = 0;
+			else if (count == 3)
+			{
+				newdata[x][y] = 1;
+				if (!data[x][y])
+					checkBorders();
+			}
+			else
+				newdata[x][y] = data[x][y];
+
+			emptycells += !newdata[x][y];
 		}
+
+		void processInner(int x, int y)
+		{
+			auto count = ringSum!((int x, int y) => data[x][y])(x, y);
+
+			if (count < 2 || count > 3)
+				newdata[x][y] = 0;
+			else if (count == 3)
+				newdata[x][y] = 1;
+			else
+				newdata[x][y] = data[x][y];
+
+			emptycells += !newdata[x][y];
+		}
+
+		foreach (x; 1 .. CHUNKSIZE - 1)
+			foreach (y; 1 .. CHUNKSIZE - 1)
+				processInner(x, y);
+
+		foreach (x; 0 .. CHUNKSIZE)
+		{
+			processOuter(x, 0);
+			processOuter(x, CHUNKSIZE - 1);
+		}
+		foreach (y; 1 .. CHUNKSIZE - 1)
+		{
+			processOuter(0, y);
+			processOuter(CHUNKSIZE - 1, y);
+		}
+
+		assert(emptycells <= CHUNKSIZE * CHUNKSIZE);
 		if (emptycells == CHUNKSIZE * CHUNKSIZE)
 			emptyIterations++;
 		else
@@ -103,9 +130,7 @@ class Chunk
 	void finish()
 	{
 		if (emptyIterations >= 5)
-		{
 			deleteChunk(cx, cy);
-		}
 		swap(data, newdata);
 	}
 }
@@ -191,37 +216,48 @@ void main()
 
 void init()
 {
-	field[tuple(0, 0)] = new Chunk(0, 0);
-	Chunk ch = field[tuple(0, 0)];
-	ch.data[12][4] = 1;
-	ch.data[12][5] = 1;
-	ch.data[11][6] = 1;
-	ch.data[13][6] = 1;
-	ch.data[12][7] = 1;
-	ch.data[12][8] = 1;
-	ch.data[12][9] = 1;
-	ch.data[12][10] = 1;
-	ch.data[11][11] = 1;
-	ch.data[13][11] = 1;
-	ch.data[12][12] = 1;
-	ch.data[12][13] = 1;
+	foreach (x; -10 .. 10)
+	{
+		foreach (y; -5 .. 5)
+		{
+			Chunk ch = new Chunk(x, y);
+			field[tuple(x, y)] = ch;
+			ch.data[12][4] = 1;
+			ch.data[12][5] = 1;
+			ch.data[11][6] = 1;
+			ch.data[13][6] = 1;
+			ch.data[12][7] = 1;
+			ch.data[12][8] = 1;
+			ch.data[12][9] = 1;
+			ch.data[12][10] = 1;
+			ch.data[11][11] = 1;
+			ch.data[13][11] = 1;
+			ch.data[12][12] = 1;
+			ch.data[12][13] = 1;
+		}
+	}
 }
 
-import std.traits : isNumeric;
+import std.traits;
 
 ubyte sign(T)(T val) if (isNumeric!T)
 {
 	return !!(val & (1 << (T.sizeof * 8 - 1)));
 }
 
-ubyte getNeighbours(int x, int y)
+auto ringSum(alias fun, N)(N x, N y) if (isCallable!fun && isNumeric!N)
 {
 	// dfmt off
-	return cast(ubyte) (
-		getCellN(x - 1, y - 1) + getCellN(x    , y - 1) + getCellN(x + 1, y - 1) +
-		getCellN(x - 1, y    ) +                          getCellN(x + 1, y    ) +
-		getCellN(x - 1, y + 1) + getCellN(x    , y + 1) + getCellN(x + 1, y + 1)) ;
+	return (
+		fun(x - 1, y - 1) + fun(x    , y - 1) + fun(x + 1, y - 1) +
+		fun(x - 1, y    ) +                     fun(x + 1, y    ) +
+		fun(x - 1, y + 1) + fun(x    , y + 1) + fun(x + 1, y + 1)) ;
 	// dfmt on
+}
+
+ubyte getNeighbours(int x, int y)
+{
+	return cast(ubyte) ringSum!getCellN(x, y);
 }
 
 Chunk* getChunk(int x, int y)
@@ -270,13 +306,13 @@ void deleteChunk(int x, int y)
 	auto tup = tuple(x, y);
 	field.remove(tup);
 	if (tuple(x - 1, y) in field)
-		field[tuple(x - 1, y)].borderR = false;
+		field[tuple(x - 1, y)].borderR = true;
 	if (tuple(x + 1, y) in field)
-		field[tuple(x + 1, y)].borderL = false;
+		field[tuple(x + 1, y)].borderL = true;
 	if (tuple(x, y - 1) in field)
-		field[tuple(x, y - 1)].borderD = false;
+		field[tuple(x, y - 1)].borderD = true;
 	if (tuple(x, y + 1) in field)
-		field[tuple(x, y + 1)].borderU = false;
+		field[tuple(x, y + 1)].borderU = true;
 }
 
 void tick()
