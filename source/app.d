@@ -19,6 +19,10 @@ class SDLException : Exception
 	}
 }
 
+alias ChunkCoord = Tuple!(int, int);
+alias CellCoord = Tuple!(int, int);
+immutable auto WHITE = SDL_Color(0xFF, 0xFF, 0xFF, 0xFF);
+
 class Chunk
 {
 	int cx;
@@ -111,7 +115,10 @@ int mod(int a, int b) pure
 	return (a % b + b) % b;
 }
 
-immutable int CHUNKSIZE = 64;
+import std.math : pow;
+
+immutable int CHUNKSIZEPOW = 6;
+immutable int CHUNKSIZE = pow(2, CHUNKSIZEPOW);
 
 TTF_Font* font;
 
@@ -131,8 +138,9 @@ int shiftX;
 int shiftY;
 bool active = true;
 
-Chunk[Tuple!(int, int)] field;
-bool drawDebug = false;
+Chunk[ChunkCoord] field;
+uint iteration;
+bool drawDebug = true;
 
 void main()
 {
@@ -199,9 +207,11 @@ void init()
 	ch.data[12][13] = 1;
 }
 
-T sign(T)(T val)
+import std.traits : isNumeric;
+
+ubyte sign(T)(T val) if (isNumeric!T)
 {
-	return val >> (T.sizeof * 8 - 1);
+	return !!(val & (1 << (T.sizeof * 8 - 1)));
 }
 
 ubyte getNeighbours(int x, int y)
@@ -228,23 +238,26 @@ ubyte* getCellP(int x, int y)
 ubyte getCell(int x, int y)
 {
 	Chunk* chunk = getChunk(x, y);
-	return chunk is null ? 0 : chunk.data[x.mod(CHUNKSIZE)][y.mod(CHUNKSIZE)];
+	return chunk is null ? 0 : chunk.data[x - chunk.x_off][y - chunk.y_off];
 }
 
 ubyte getCellN(int x, int y)
 {
 	Chunk* chunk = getChunk(x, y);
-	return chunk is null ? 0 : !!chunk.data[x.mod(CHUNKSIZE)][y.mod(CHUNKSIZE)];
+	return chunk is null ? 0 : chunk.data[x - chunk.x_off][y - chunk.y_off];
 }
 
-Tuple!(int, int) screen2cell(int x, int y)
+ChunkCoord screen2cell(int x, int y)
 {
-	return tuple((x - shiftX) / cSize, (y - shiftY) / cSize);
+	return tuple((x - shiftX - 1) / cSize - sign(x - shiftX),
+		(y - shiftY - 1) / cSize - sign(y - shiftY));
 }
 
-Tuple!(int, int) cell2chunk(int x, int y)
+ChunkCoord cell2chunk(int x, int y) pure
 {
-	return tuple(floor(cast(float) x / CHUNKSIZE).to!int, floor(cast(float) y / CHUNKSIZE).to!int);
+	return tuple(
+		x >> CHUNKSIZEPOW,
+		y >> CHUNKSIZEPOW);
 }
 
 void touchChunk(int x, int y)
@@ -283,6 +296,7 @@ void tick()
 		field.each!(c => c.iterate);
 		field.each!(c => c.finish);
 	}
+	iteration++;
 }
 
 void drawText(string text, int x, int y, SDL_Color col)
@@ -296,6 +310,14 @@ void drawText(string text, int x, int y, SDL_Color col)
 
 void draw()
 {
+	import std.datetime.stopwatch;
+
+	static uint frame;
+	static float fps;
+	static auto sw = StopWatch(AutoStart.no);
+	if (!sw.running)
+		sw.start();
+
 	sdlr.SDL_SetRenderDrawColor(0, 0, 0, 255);
 	sdlr.SDL_RenderClear();
 
@@ -313,23 +335,38 @@ void draw()
 				}
 			}
 		}
-		sdlr.SDL_SetRenderDrawColor(0, 255, 0, 128);
-		sdlr.SDL_RenderDrawRect(new SDL_Rect(
-				chunk.cx * CHUNKSIZE * cSize + shiftX,
-				chunk.cy * CHUNKSIZE * cSize + shiftY,
-				CHUNKSIZE * cSize, CHUNKSIZE * cSize));
+		if (drawDebug)
+		{
+			sdlr.SDL_SetRenderDrawColor(0, 255, 0, 128);
+			sdlr.SDL_RenderDrawRect(new SDL_Rect(
+					chunk.cx * CHUNKSIZE * cSize + shiftX,
+					chunk.cy * CHUNKSIZE * cSize + shiftY,
+					CHUNKSIZE * cSize, CHUNKSIZE * cSize));
+		}
+	}
+	drawText(fps.format!"%.2f fps", 0, 0, SDL_Color(0x00, 0xFF, 0x00, 0xFF));
+	drawText(iteration.format!"iteration %d", 0, 20, SDL_Color(0xFF, 0xFF, 0x00, 0xFF));
+	if (drawDebug)
+	{
+		drawText(format!"%d chunks / %d cells"(field.length, (field.length * CHUNKSIZE * CHUNKSIZE)), 0, 40, WHITE);
+
+		auto cellCoords = screen2cell(mouseX, mouseY);
+		auto chunkCoords = cellCoords.expand.cell2chunk;
+		drawText(format!"%(%(%d %d%) / %)"([
+				cellCoords,
+				chunkCoords,
+				tuple(cellCoords[0].mod(CHUNKSIZE), cellCoords[1].mod(CHUNKSIZE))
+			]), 0, 60, WHITE);
+	}
+	if (sw.peek.total!"msecs" >= 500)
+	{
+		fps = cast(float) frame / sw.peek.total!"msecs" * 1000;
+		frame = 0;
+		sw.reset();
 	}
 
-	import std.math;
-
-	auto cellCoords = screen2cell(mouseX, mouseY);
-	drawText(cellCoords.toString, 0, 0, SDL_Color(255, 255, 255, 255));
-	drawText(cell2chunk(cellCoords.expand).toString,
-		0, 20, SDL_Color(255, 255, 255, 255));
-	drawText(tuple(cellCoords[0].mod(CHUNKSIZE), cellCoords[1].mod(CHUNKSIZE))
-			.toString, 0, 40, SDL_Color(255, 255, 255, 255));
-
 	sdlr.SDL_RenderPresent();
+	frame++;
 }
 
 void pollEvents()
