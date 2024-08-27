@@ -13,3 +13,4 @@ gameoflife-test-*
 *.o
 *.obj
 *.lst
+trace*
