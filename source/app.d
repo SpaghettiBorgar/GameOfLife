@@ -135,6 +135,45 @@ class Chunk
 	}
 }
 
+
+
+class Figure
+{
+	const uint width;
+	const uint height;
+	ubyte[][] data;
+
+	this(uint width, uint height)
+	{
+		this.width = width;
+		this.height = height;
+		this.data = new ubyte[][](height, width);
+	}
+
+	this(string filePath)
+	{
+		auto file = new File(getResourcePath("figures/" ~ filePath ~ ".txt"));
+		auto byLine = file.byLine();
+		int row = 0;
+		this.width = cast(uint) byLine.front().length;
+		this.data = new ubyte[][](file.size() / (this.width+1));
+		foreach (line; byLine)
+		{
+			this.data[row] = new ubyte[](this.width);
+			foreach(col, c; line)
+			{
+				if(c == '#')
+					this.data[row][col] = 1;
+				else if(c == ' ')
+					this.data[row][col] = 0;
+				
+			}
+			row++;
+		}
+		this.height = cast(uint) this.data.length;
+	}
+}
+
 int mod(int a, int b) pure
 {
 	return (a % b + b) % b;
@@ -161,7 +200,7 @@ Uint16 keymods;
 ubyte cSize = 8;
 int shiftX;
 int shiftY;
-bool active = true;
+bool active = false;
 
 Chunk[ChunkCoord] field;
 uint iteration;
@@ -201,7 +240,7 @@ void main()
 
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
-	font = TTF_OpenFont("res/fonts/NotoSansMono.ttf", 14);
+	font = TTF_OpenFont(getResourcePath("fonts/NotoSansMono.ttf").toStringz, 14);
 
 	init();
 
@@ -216,6 +255,8 @@ void main()
 
 void init()
 {
+	iteration = 0;
+	
 	foreach (x; -10 .. 10)
 	{
 		foreach (y; -5 .. 5)
@@ -234,6 +275,18 @@ void init()
 			ch.data[13][11] = 1;
 			ch.data[12][12] = 1;
 			ch.data[12][13] = 1;
+		}
+	}
+	paintFigure(new Figure("qrcode"), 20, 20);
+}
+
+
+void paintFigure(Figure fig, int x_off, int y_off)
+{
+	import std.range;
+	foreach(y, row; fig.data.enumerate(y_off)) {
+		foreach(x, c; row.enumerate(x_off)) {
+			*getCellP(cast(int) x, cast(int) y) = c;
 		}
 	}
 }
@@ -327,12 +380,15 @@ void tick()
 	}
 
 	if (active)
-	{
+		iterate();
+}
 
-		field.each!(c => c.iterate);
-		field.each!(c => c.finish);
-	}
-	iteration++;
+void iterate()
+{
+	field.each!(c => c.iterate);
+	field.each!(c => c.finish);
+
+	iteration++;	
 }
 
 void drawText(string text, int x, int y, SDL_Color col)
@@ -467,6 +523,12 @@ void onKeyDown(SDL_KeyboardEvent e)
 	case SDLK_q:
 		quit();
 		break;
+	case SDLK_r:
+		init();
+		break;
+	case SDLK_s:
+		iterate();
+		break;
 	case SDLK_SPACE:
 		active = !active;
 		break;
@@ -589,4 +651,9 @@ void onWindowEvent(SDL_WindowEvent e)
 	case SDL_WINDOWEVENT_CLOSE:
 	default:
 	}
+}
+
+string getResourcePath(string name)
+{
+	return "./res/" ~ name;
 }
